@@ -42,7 +42,7 @@
       display: inline-flex;
       align-items: baseline;
       gap: 4px;
-      margin-top: 3px;
+      margin-left: 8px;
       padding: 2px 8px;
       border-radius: 6px;
       background: #0f172a;
@@ -52,6 +52,8 @@
       line-height: 1.35;
       width: fit-content;
       letter-spacing: .2px;
+      vertical-align: middle;
+      white-space: nowrap;
       z-index: 9999;
     }
     .${BADGE_CLASS} .aexpr-label {
@@ -105,6 +107,12 @@
       {
         acceptNode(text) {
           if (!text.nodeValue) return NodeFilter.FILTER_REJECT;
+          // pula texto riscado: preço antigo (line-through) não é o preço atual
+          const parent = text.parentElement;
+          if (parent) {
+            const cs = getComputedStyle(parent);
+            if (cs.textDecorationLine.includes("line-through")) return NodeFilter.FILTER_SKIP;
+          }
           const m = RE_PRICE.exec(text.nodeValue);
           if (m && toNumber(m[1]) !== taxValue) return NodeFilter.FILTER_ACCEPT;
           return NodeFilter.FILTER_SKIP;
@@ -117,6 +125,10 @@
       if (m) prices.push({ node: n, value: toNumber(m[1]), text: m[1] });
     }
     if (!prices.length) return null;
+    // heurística: o preço principal é o MAIOR valor do bloco após remover
+    // (a) o riscado (filtrado acima pelo line-through) e (b) os impostos.
+    // Valores menores sobrando (parcelas "51,03 x 12", cupom "OFF em 370,00")
+    // perdem pro maior — o preço cheio sempre domina dentro do bloco de preço.
     prices.sort((a, b) => b.value - a.value);
     return prices[0];
   }
@@ -138,11 +150,11 @@
     return block.querySelector(`.${BADGE_CLASS}`) !== null;
   }
 
-  function injectBadge(block, mainValue, taxValue) {
+  function injectBadge(block, mainValue, taxValue, priceNode) {
     if (badgeAlready(block)) return;
 
     const total = Math.round((mainValue + taxValue) * 100) / 100;
-    const badge = document.createElement("div");
+    const badge = document.createElement("span");
     badge.className = BADGE_CLASS;
     badge.setAttribute(BADGE_MARK, "1");
     // textContent por hygiene (sem innerHTML com dados externos)
@@ -153,7 +165,14 @@
     value.textContent = formatBRL(total);
     badge.appendChild(label);
     badge.appendChild(value);
-    block.appendChild(badge);
+
+    // injeta DO LADO do preço principal (inline), não embaixo do bloco
+    const anchor = priceNode && priceNode.parentElement;
+    if (anchor && anchor.parentElement) {
+      anchor.insertAdjacentElement("afterend", badge);
+    } else {
+      block.appendChild(badge);
+    }
   }
 
   /* ---------- scans ---------- */
@@ -162,7 +181,7 @@
     const found = blockFor(taxTextNode);
     if (!found) return;
     if (found.block.getAttribute(BADGE_MARK) === "1" || badgeAlready(found.block)) return;
-    injectBadge(found.block, found.main.value, found.taxValue);
+    injectBadge(found.block, found.main.value, found.taxValue, found.main.node);
   }
 
   function scanWholePage() {
