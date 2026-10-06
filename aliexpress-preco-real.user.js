@@ -1,32 +1,45 @@
 // ==UserScript==
 // @name         AliExpress Preço Real
 // @namespace    erick.hermes
-// @version      1.4.0
-// @description  TOTAL real (preço + impostos estimados) do lado do preço no AliExpress BR, atualizado conforme SKU selecionado e quantidade. Seletores mapeados por scraping real.
+// @version      2.1.0
+// @description  Mostra o total estimado (preço + impostos) abaixo do bloco de preço do AliExpress BR, atualizando com SKU e quantidade.
 // @author       Erick Santos (via Hermes)
-// @match        https://pt.aliexpress.com/*
+// @match        https://pt.aliexpress.com/item/*
 // @match        https://*.aliexpress.com/item/*
-// @grant        GM_registerMenuCommand
-// @grant        GM_getValue
-// @grant        GM_setValue
+// @match        https://aliexpress.com/item/*
 // @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_setValue
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
 
-(function () {
+(() => {
   "use strict";
 
   const BADGE_CLASS = "aexpr-total-badge";
-  const BADGE_MARK = "data-aexpr-done";
   const ENABLED_KEY = "aexpr_enabled";
+  const PRODUCT_SCOPE_SELECTOR = ".pdp-info-right, [class*='pdp-info-right']";
+  const PRICE_SELECTOR = '[class*="price-default--current--"]';
+  const TAX_SELECTOR = '[class*="vat-installment--item"]';
+  const HOST_SELECTOR = '[class*="price-default--wrap--"]';
+  const QUANTITY_SELECTOR = "input.comet-v2-input-number-input";
+  const PRICE_RE = /R\$\s?(\d{1,3}(?:\.\d{3})*,\d{2})/;
+  const TAX_RE = /R\$\s?(\d{1,3}(?:\.\d{3})*,\d{2})\+?\s*em\s+impostos\s+estimados/i;
+
   let enabled = GM_getValue(ENABLED_KEY, true);
+  let scheduled = false;
 
   GM_addStyle(`
     .${BADGE_CLASS} {
-      display: inline-block;
-      margin-left: 8px;
-      padding: 2px 8px;
+      display: block;
+      width: fit-content;
+      max-width: 100%;
+      box-sizing: border-box;
+      margin-top: 4px;
+      padding: 3px 8px;
+      overflow-wrap: anywhere;
       border-radius: 6px;
       background: #0f172a;
       color: #7dffb2;
@@ -34,143 +47,181 @@
       font-size: 13px;
       line-height: 1.35;
       letter-spacing: .2px;
-      vertical-align: middle;
-      white-space: nowrap;
-      z-index: 9999;
-      box-shadow: 0 1px 2px rgba(0,0,0,.3);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, .3);
     }
   `);
 
-  function formatBRL(v) {
-    return "R$" + v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function parseBRL(text, expression = PRICE_RE) {
+    const match = (text || "").match(expression);
+    if (!match) return null;
+    const value = Number.parseFloat(match[1].replace(/\./g, "").replace(",", "."));
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
-  function parseBRL(text) {
-    const m = (text || "").match(/R\$\s?(\d{1,3}(?:\.\d{3})*,\d{2})/);
-    return m ? parseFloat(m[1].replace(/\./g, "").replace(",", ".")) : null;
+  function formatBRL(value) {
+    return "R$" + value.toLocaleString("pt-BR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
   }
 
-  function textOf(el) { return el ? (el.textContent || "").trim() : ""; }
+  function isVisible(element) {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  }
 
-  function getTaxText() {
-    const span = document.querySelector('[class*="vat-installment--item"]');
-    if (span && /impostos estimados/i.test(textOf(span))) return textOf(span);
-    for (const el of document.querySelectorAll("span, div")) {
-      if (el.children.length === 0 && /impostos estimados/i.test(textOf(el))) return textOf(el);
+  function getProductScope() {
+    const tax = [...document.querySelectorAll(TAX_SELECTOR)]
+      .find((element) => isVisible(element) && parseBRL(element.textContent, TAX_RE) !== null);
+    return tax?.closest(PRODUCT_SCOPE_SELECTOR) || null;
+  }
+
+  function getTaxValue(scope) {
+    const preferred = [...scope.querySelectorAll(TAX_SELECTOR)].find(isVisible);
+    const preferredValue = parseBRL(preferred?.textContent, TAX_RE);
+    if (preferredValue !== null) return preferredValue;
+
+    // Fallback limitado ao produto: não mistura cards de recomendação com o PDP atual.
+    for (const element of scope.querySelectorAll("span, div")) {
+      if (element.children.length !== 0) continue;
+      const value = parseBRL(element.textContent, TAX_RE);
+      if (value !== null) return value;
     }
-    return "";
+    return null;
   }
 
-  function getQuantity() {
-    const input = document.querySelector("input.comet-v2-input-number-input");
-    if (!input) return null;
-    const n = parseInt(input.value, 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
+  function parseQuantity(rawValue) {
+    const normalized = String(rawValue ?? "").trim();
+    if (!/^[1-9]\d*$/.test(normalized)) return null;
+    const value = Number(normalized);
+    return Number.isSafeInteger(value) ? value : null;
   }
 
-  function injectBadge(priceEl, total, qty) {
-    // SÓ EMBAIXO DO WRAPPER de preço: blind contra variações de layout interno
-    // (defaultPriceWrap/currentWrap/banner/overflow) — o badge mora no contêiner
-    // comum e estável `price-default--wrap`, que envolve TODOS os variants.
-    const label = qty > 1 ? "TOTAL c/ impostos (x" + qty + "): " : "TOTAL c/ impostos: ";
-    let host = null;
-    // 1) contêiner estável englobando todo o bloco de preço
-    const wrapRoot = priceEl.closest('[class*="price-default--wrap--"]');
-    if (wrapRoot) host = wrapRoot;
-    else {
-      // fallback: sobe até deixar de estar dentro de um wrap interno do preço
-      let el = priceEl.parentElement;
-      while (el && el !== document.body) {
-        if (!/[--]wrap]/.test(el.className || '')) { host = el; break; }
-        el = el.parentElement;
-      }
-      host = host || priceEl.parentElement;
-    }
-    if (!host) return;
-    let badge = host.querySelector(":scope > ." + BADGE_CLASS);
+  function getQuantity(scope) {
+    // O seletor de quantidade fica na coluna de compra; o ancestral comum é
+    // pdp-body-top. Assim não capturamos input oculto de outro produto/card.
+    const productTop = scope.closest(".pdp-body-top") || scope;
+    const input = [...productTop.querySelectorAll(QUANTITY_SELECTOR)].find(isVisible);
+    return input ? parseQuantity(input.value) : null;
+  }
+
+  function getCurrentPrice(scope) {
+    const prices = [...scope.querySelectorAll(PRICE_SELECTOR)]
+      .filter(isVisible)
+      .map((element) => ({ element, value: parseBRL(element.textContent) }))
+      .filter(({ value }) => value !== null);
+
+    // Se re-render deixar duas cópias visíveis, o principal é o de maior fonte.
+    prices.sort((a, b) => Number.parseFloat(getComputedStyle(b.element).fontSize)
+      - Number.parseFloat(getComputedStyle(a.element).fontSize));
+    return prices[0] || null;
+  }
+
+  function getHost(priceElement) {
+    return priceElement.closest(HOST_SELECTOR) || priceElement.parentElement;
+  }
+
+  function removeBadges(root = document) {
+    root.querySelectorAll(`.${BADGE_CLASS}`).forEach((badge) => badge.remove());
+  }
+
+  function updateBadge(host, total, quantity) {
+    let badge = host.querySelector(`:scope > .${BADGE_CLASS}`);
+    host.querySelectorAll(`.${BADGE_CLASS}`).forEach((candidate) => {
+      if (candidate !== badge) candidate.remove();
+    });
+
     if (!badge) {
       badge = document.createElement("span");
       badge.className = BADGE_CLASS;
-      badge.style.display = "block";   // própria linha, no fim do wrapper
-      badge.style.marginTop = "2px";
-      badge.style.width = "fit-content";
       host.appendChild(badge);
     }
-    badge.textContent = label + formatBRL(total);
-    // dedupe: se houver badge em qualquer subnível antigo (layout mudou), remove
-    host.querySelectorAll("." + BADGE_CLASS).forEach((other) => {
-      if (other !== badge) other.remove();
-    });
+
+    const quantityLabel = quantity > 1 ? ` (x${quantity})` : "";
+    badge.textContent = `TOTAL c/ impostos${quantityLabel}: ${formatBRL(total)}`;
   }
 
-  // handler PK de mudanças de preço/impostos: o AliExpress re-renderiza o bloco
-  // de preço ao trocar SKU/banner — o badge acompanhava mas às vezes sobrava
-  // órfão (wrap antigo removido, badgeuplicado). Reescaneia sempre e DEDUPLICA.
-  function dedupeBadges() {
-    // processo global: 1 badge por host (price-default--wrap); remove extra/órfão
-    const hosts = new Set();
-    document.querySelectorAll("." + BADGE_CLASS).forEach((b) => {
-      if (hosts.has(b.parentElement)) { b.remove(); return; }
-      hosts.add(b.parentElement);
-    });
-  }
-
-  function refreshBadge() {
+  function refresh() {
     if (!enabled) return;
-    // cleanup: depura antes de reprocessar
-    dedupeBadges();
-    const taxValue = parseBRL(getTaxText());
-    if (taxValue == null || taxValue <= 0) {
-      removeAllBadges(false);
-      return;
-    }
-    const qty = getQuantity() || 1;
-    const priceEls = document.querySelectorAll('[class*="price-default--current"]');
-    if (!priceEls.length) return;
-    priceEls.forEach((priceEl) => {
-      const unit = parseBRL(textOf(priceEl));
-      if (unit == null || unit <= 0) return;
-      const total = Math.round((unit + taxValue) * qty * 100) / 100;
-      injectBadge(priceEl, total, qty);
-    });
+    // Reconcilia primeiro: SKU/preço temporariamente ausente nunca deixa total obsoleto.
+    removeBadges();
+
+    const scope = getProductScope();
+    if (!scope) return;
+    const quantity = getQuantity(scope);
+    if (quantity === null) return;
+
+    const tax = getTaxValue(scope);
+    const currentPrice = getCurrentPrice(scope);
+    if (tax === null || !currentPrice) return;
+
+    const host = getHost(currentPrice.element);
+    if (!host) return;
+    const total = Math.round((currentPrice.value + tax) * quantity * 100) / 100;
+    updateBadge(host, total, quantity);
   }
 
-  function removeAllBadges(clearMark) {
-    document.querySelectorAll("." + BADGE_CLASS).forEach((b) => {
-      const wrap = b.closest('[class*="price-default--wrap--"]') || b.parentElement;
-      b.remove();
-      if (wrap && clearMark) wrap.removeAttribute(BADGE_MARK);
-    });
-  }
-
-  function tick() {
-    if (!enabled) return;
-    try { refreshBadge(); } catch (e) { console.warn("[aexpr]", e); }
-  }
-
-  // observer: recalcula quando a página muda (troca de SKU, quantidade, re-render).
-  //Ignora mutações geradas pelo próprio badge pra não virar loop infinito.
-  const mo = new MutationObserver((muts) => {
-    for (const m of muts) {
-      if (m.target && m.target.closest && m.target.closest("." + BADGE_CLASS)) continue;
-      if (m.addedNodes && m.addedNodes.length === 1) {
-        const n = m.addedNodes[0];
-        if (n.classList && n.classList.contains(BADGE_CLASS)) continue;
+  function scheduleRefresh() {
+    if (!enabled || scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      try {
+        refresh();
+      } catch (error) {
+        console.warn("[AliExpress Preço Real] atualização ignorada:", error);
       }
-      requestAnimationFrame(tick);
+    });
+  }
+
+  function isOwnBadgeNode(node) {
+    return node.nodeType === Node.ELEMENT_NODE
+      && Boolean(node.classList.contains(BADGE_CLASS) || node.closest(`.${BADGE_CLASS}`));
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      const target = mutation.target.nodeType === Node.ELEMENT_NODE
+        ? mutation.target
+        : mutation.target.parentElement;
+      if (target?.closest(`.${BADGE_CLASS}`)) continue;
+
+      // Adição/remoção do nosso próprio badge tem target=host; ignorar as duas
+      // impede o refresh de se autoagendar indefinidamente.
+      const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+      if (changedNodes.length > 0 && changedNodes.every(isOwnBadgeNode)) continue;
+
+      scheduleRefresh();
       return;
     }
   });
-  mo.observe(document.body, { childList: true, subtree: true, characterData: true });
 
-  tick();
+  observer.observe(document.documentElement, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+
+  // input controlado pode mudar value sem gerar childList/characterData.
+  document.addEventListener("input", (event) => {
+    if (event.target.matches?.(QUANTITY_SELECTOR)) scheduleRefresh();
+  }, true);
+  document.addEventListener("change", (event) => {
+    if (event.target.matches?.(QUANTITY_SELECTOR)) scheduleRefresh();
+  }, true);
+  window.addEventListener("popstate", scheduleRefresh);
+  window.addEventListener("pageshow", scheduleRefresh);
 
   GM_registerMenuCommand(
     enabled ? "🔇 AliExpress Preço Real: OFF" : "✅ AliExpress Preço Real: ON",
     () => {
       enabled = !enabled;
       GM_setValue(ENABLED_KEY, enabled);
-      if (enabled) tick(); else removeAllBadges(true);
-    }
+      if (enabled) refresh();
+      else removeBadges();
+    },
   );
+
+  refresh();
 })();

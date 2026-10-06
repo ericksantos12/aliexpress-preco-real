@@ -1,40 +1,40 @@
-# AliExpress Preço Real (Firefox)
+# AliExpress Preço Real — Tampermonkey
 
-Extensão que mostra o **preço total real** (produto + impostos estimados) em cada card e página de produto do AliExpress BR.
+Userscript para o AliExpress Brasil que mostra o **total estimado** (preço atual + impostos estimados) logo abaixo do bloco de preço do produto.
 
-O AliExpress sempre exibe o valor do produto em destaque e, em letra pequena, a linha "Compra internacional, R$X,XX+ em impostos estimados." — o que você paga de verdade é a soma. Este badge calcula e mostra essa soma automaticamente:
+> O `+` em “impostos estimados” significa “a partir de”; o total usa o valor exibido pelo AliExpress e pode variar conforme ICMS/estado.
 
+## Instalação
+
+1. Instale o [Tampermonkey](https://www.tampermonkey.net/).
+2. Abra o dashboard do Tampermonkey → **Adicionar novo script**.
+3. Substitua o conteúdo por `aliexpress-preco-real.user.js` e salve.
+4. Recarregue uma página de produto do AliExpress BR.
+
+## Comportamento
+
+- Lê o **preço atual** — não o preço riscado/original.
+- Lê a linha “`R$ X+ em impostos estimados`”.
+- Mostra um único badge abaixo do wrapper estável de preço, sem depender dos layouts internos de banner/promoção.
+- Recalcula quando você troca SKU/cor/pacote e quando a quantidade muda.
+- Não mostra total se preço, imposto ou quantidade não estiverem disponíveis/íntegros.
+- O menu do Tampermonkey oferece toggle on/off persistente.
+
+## Exemplos validados
+
+- `R$ 466,50` + `R$ 265,53+ em impostos estimados` → **R$ 732,03**
+- DSV: `R$ 392,44` + `R$ 191,43+` → **R$ 583,87**
+- DSV x2 → **R$ 1.167,74**
+
+## Desenvolvimento e verificação
+
+```bash
+node --check aliexpress-preco-real.user.js
+node tests/userscript.test.js
 ```
-TOTAL c/ impostos: R$723,15
-```
 
-## Instalação (modo desenvolvedor)
+Os testes cobrem parser BRL, arredondamento, cálculo por quantidade, validação estrita de quantidade, escopo do PDP, ausência de `innerHTML` e proteção contra o loop do `MutationObserver`.
 
-1. Abra o Firefox e digite `about:debugging#/runtime/this-firefox`
-2. Clique em **"Carregar Add-on Temporário…"**
-3. Selecione o arquivo `manifest.json` desta pasta
-4. Pronto — abra qualquer produto do AliExpress BR
+## Arquivos legados
 
-> Modo temporário: a extensão some ao reiniciar o Firefox. Para instalação permanente, compacte os arquivos em `.zip` e assine via [addons.mozilla.org](https://addons.mozilla.org/developers/) (ou use a versão de desenvolvedor do Firefox com `xpinstall.signatures.required=false` em `about:config`).
-
-## Uso
-
-- O badge aparece automaticamente sob cada bloco de preço que tenha impostos estimados
-- **Ligar/desligar**: clique no ícone da extensão na barra de ferramentas (estado persiste)
-
-## Como funciona
-
-- **Parser BRL**: reconhece `R$462,07`, `R$ 1.331,59` e a âncora distintiva `R$261,08+ em impostos estimados` (o `+` antes de "em impostos estimados" é o delimitador — evita confundir com preços comuns)
-- **Seletores sem classes**: não depende dos classnames hashados do AliExpress (mudam toda semana); usa texto e estrutura de DOM
-- **MutationObserver**: cobre lazy load, re-render e navegação SPA sem quebrar o layout
-
-## Caso de teste (do screenshot real)
-
-Card com:
-- Preço principal: `R$462,07`
-- Impostos: `Compra internacional, R$261,08+ em impostos estimados.`
-
-Resultado esperado — badge injetado:
-- **TOTAL c/ impostos: R$723,15** (462,07 + 261,08)
-
-Nota: o `+` no valor dos impostos significa "a partir de" (o valor final pode variar por estado/ICMS). O badge mostra a soma com o valor exibido.
+`manifest.json`, `content.js` e `background.js` são a versão Firefox inicial. O artefato mantido e recomendado é `aliexpress-preco-real.user.js`.
