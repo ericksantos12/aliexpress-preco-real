@@ -1,12 +1,11 @@
 // ==UserScript==
 // @name         AliExpress Preço Real
 // @namespace    erick.hermes
-// @version      1.2.0
-// @description  Mostra o TOTAL real (preço do produto + impostos estimados) do lado do preço, na página de produto do AliExpress BR. Seletores mapeados por scraping real.
+// @version      1.3.0
+// @description  TOTAL real (preço + impostos estimados) do lado do preço no AliExpress BR, atualizado conforme SKU selecionado e quantidade. Seletores mapeados por scraping real.
 // @author       Erick Santos (via Hermes)
 // @match        https://pt.aliexpress.com/*
 // @match        https://*.aliexpress.com/item/*
-// @match        https://aliexpress.com/item/*
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -42,86 +41,92 @@
     }
   `);
 
-  function formatBRL(value) {
-    return "R$" + value.toLocaleString("pt-BR", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
+  function formatBRL(v) {
+    return "R$" + v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   function parseBRL(text) {
-    const m = text.match(/R\$\s?(\d{1,3}(?:\.\d{3})*,\d{2})/);
-    if (!m) return null;
-    return parseFloat(m[1].replace(/\./g, "").replace(",", "."));
+    const m = (text || "").match(/R\$\s?(\d{1,3}(?:\.\d{3})*,\d{2})/);
+    return m ? parseFloat(m[1].replace(/\./g, "").replace(",", ".")) : null;
   }
 
-  function textOf(el) {
-    return el ? (el.textContent || "").trim() : "";
+  function textOf(el) { return el ? (el.textContent || "").trim() : ""; }
+
+  function getTaxText() {
+    const span = document.querySelector('[class*="vat-installment--item"]');
+    if (span && /impostos estimados/i.test(textOf(span))) return textOf(span);
+    for (const el of document.querySelectorAll("span, div")) {
+      if (el.children.length === 0 && /impostos estimados/i.test(textOf(el))) return textOf(el);
+    }
+    return "";
   }
 
-  function injectBadge(priceEl, total) {
+  function getQuantity() {
+    const input = document.querySelector("input.comet-v2-input-number-input");
+    if (!input) return null;
+    const n = parseInt(input.value, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
+  function injectBadge(priceEl, total, qty) {
     const wrap = priceEl.closest('[class*="price-default--defaultPriceWrap"]') || priceEl.parentElement;
-    if (!wrap || wrap.getAttribute(BADGE_MARK) === "1") return;
+    if (!wrap) return;
+    let badge = wrap.querySelector("." + BADGE_CLASS);
+    const label = qty > 1 ? "TOTAL c/ impostos (x" + qty + "): " : "TOTAL c/ impostos: ";
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = BADGE_CLASS;
+      priceEl.insertAdjacentElement("afterend", badge);
+    }
+    badge.textContent = label + formatBRL(total);
     wrap.setAttribute(BADGE_MARK, "1");
-
-    const badge = document.createElement("span");
-    badge.className = BADGE_CLASS;
-    badge.textContent = "TOTAL c/ impostos: " + formatBRL(total);
-    priceEl.insertAdjacentElement("afterend", badge);
   }
 
-  function processProductPage() {
-    // 1) preços principais na página de produto (classe estável mapeada: price-default--current)
+  function refreshBadge() {
+    if (!enabled) return;
+    const taxValue = parseBRL(getTaxText());
+    if (taxValue == null || taxValue <= 0) {
+      removeAllBadges(true);
+      return;
+    }
+    const qty = getQuantity() || 1;
     const priceEls = document.querySelectorAll('[class*="price-default--current"]');
-    if (!priceEls.length) return false;
-
-    // 2) texto dos impostos: span com classe vat-installment--item
-    let taxText = "";
-    const taxSpan = document.querySelector('[class*="vat-installment--item"]');
-    if (taxSpan) {
-      taxText = textOf(taxSpan);
-    }
-    if (!taxText) {
-      // fallback: procurar em todo o DOM (menos comum)
-      const allSpans = document.querySelectorAll("span, div");
-      for (const el of allSpans) {
-        if (el.children.length === 0 && /impostos estimados/i.test(textOf(el))) {
-          taxText = textOf(el);
-          break;
-        }
-      }
-    }
-    if (!taxText) return false;
-
-    const taxValue = parseBRL(taxText);
-    if (taxValue == null || taxValue <= 0) return false;
-
-    let processed = 0;
+    if (!priceEls.length) return;
     priceEls.forEach((priceEl) => {
-      const mainValue = parseBRL(textOf(priceEl));
-      if (mainValue == null || mainValue <= 0) return;
-      const total = Math.round((mainValue + taxValue) * 100) / 100;
-      injectBadge(priceEl, total);
-      processed++;
+      const unit = parseBRL(textOf(priceEl));
+      if (unit == null || unit <= 0) return;
+      const total = Math.round((unit + taxValue) * qty * 100) / 100;
+      injectBadge(priceEl, total, qty);
     });
-    return processed > 0;
+  }
+
+  function removeAllBadges(clearMark) {
+    document.querySelectorAll("." + BADGE_CLASS).forEach((b) => {
+      const wrap = b.closest('[class*="price-default--defaultPriceWrap"]');
+      b.remove();
+      if (wrap && clearMark) wrap.removeAttribute(BADGE_MARK);
+    });
   }
 
   function tick() {
     if (!enabled) return;
-    try {
-      processProductPage();
-    } catch (e) {
-      console.warn("[aexpr] erro:", e);
-    }
+    try { refreshBadge(); } catch (e) { console.warn("[aexpr]", e); }
   }
 
-  // MutationObserver: SPA re-render, troca de SKU, lazy-load de variações
-  const observer = new MutationObserver(() => {
-    requestAnimationFrame(tick);
+  // observer: recalcula quando a página muda (troca de SKU, quantidade, re-render).
+  //Ignora mutações geradas pelo próprio badge pra não virar loop infinito.
+  const mo = new MutationObserver((muts) => {
+    for (const m of muts) {
+      if (m.target && m.target.closest && m.target.closest("." + BADGE_CLASS)) continue;
+      if (m.addedNodes && m.addedNodes.length === 1) {
+        const n = m.addedNodes[0];
+        if (n.classList && n.classList.contains(BADGE_CLASS)) continue;
+      }
+      requestAnimationFrame(tick);
+      return;
+    }
   });
-  observer.observe(document.body, { childList: true, subtree: true });
-  window.addEventListener("popstate", tick);
+  mo.observe(document.body, { childList: true, subtree: true, characterData: true });
 
   tick();
 
@@ -130,16 +135,7 @@
     () => {
       enabled = !enabled;
       GM_setValue(ENABLED_KEY, enabled);
-      if (!enabled) {
-        document.querySelectorAll("." + BADGE_CLASS).forEach((el) => {
-          const wrap = el.closest('[class*="price-default--defaultPriceWrap"]');
-          el.remove();
-          if (wrap) wrap.removeAttribute(BADGE_MARK);
-        });
-      } else {
-        tick();
-      }
-      location.reload();
+      if (enabled) tick(); else removeAllBadges(true);
     }
   );
 })();
