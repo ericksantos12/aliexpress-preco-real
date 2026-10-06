@@ -4,12 +4,13 @@ Userscript para o AliExpress Brasil que mostra o **total estimado** (preço atua
 
 > O `+` em “impostos estimados” significa “a partir de”; o total usa o valor exibido pelo AliExpress e pode variar conforme ICMS/estado.
 
-## Instalação
+## Instalação (1 clique)
 
-1. Instale o [Tampermonkey](https://www.tampermonkey.net/).
-2. Abra o dashboard do Tampermonkey → **Adicionar novo script**.
-3. Substitua o conteúdo por `aliexpress-preco-real.user.js` e salve.
-4. Recarregue uma página de produto do AliExpress BR.
+Com o Tampermonkey instalado, abra o link direto do script — ele detecta e abre a página de instalação automaticamente:
+
+**[Clique aqui para instalar](https://github.com/ericksantos12/aliexpress-preco-real/raw/master/aliexpress-preco-real.user.js)**
+
+Alternativa manual: dashboard do Tampermonkey → **Adicionar novo script** → colar o conteúdo de `aliexpress-preco-real.user.js` → salvar → recarregar uma página de produto do AliExpress BR.
 
 ## Comportamento
 
@@ -20,11 +21,9 @@ Userscript para o AliExpress Brasil que mostra o **total estimado** (preço atua
 - Não mostra total se preço, imposto ou quantidade não estiverem disponíveis/íntegros.
 - O menu do Tampermonkey oferece toggle on/off persistente.
 
-## Exemplos validados
+## Como foi feito
 
-- `R$ 466,50` + `R$ 265,53+ em impostos estimados` → **R$ 732,03**
-- DSV: `R$ 392,44` + `R$ 191,43+` → **R$ 583,87**
-- DSV x2 → **R$ 1.167,74**
+Criado com [Hermes Agent](https://hermes-agent.nousresearch.com) (Hermes, da Nous Research): desenvolvimento iterativo guiado com scraping real do AliExpress via MCP browser stealth, seguido de três revisões de código independentes (fail-closed) e testes automatizados, com implementação final delegada ao [OpenAI Codex](https://openai.com/codex) como assistente de codificação.
 
 ## Desenvolvimento e verificação
 
