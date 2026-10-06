@@ -80,10 +80,17 @@
     if (!badge || !wrap.contains(badge)) {
       badge = document.createElement("span");
       badge.className = BADGE_CLASS;
-      // ancora no WRAP do preço (mesma linha), não no span do preço
-      wrap.appendChild(badge);
+      // ancora imediatamente após o span do preço (mesma linha), no elemento atual do DOM
+      priceEl.insertAdjacentElement("afterend", badge);
     }
     badge.textContent = label + formatBRL(total);
+    // remove qualquer badge DUPLICADO no mesmo wrap (re-render do AE cria outro)
+    const finalWrap = badge.closest('[class*="price-default--priceWrap"], [class*="price-default--defaultPriceWrap"]') || badge.parentElement;
+    if (finalWrap) {
+      finalWrap.querySelectorAll("." + BADGE_CLASS).forEach((other) => {
+        if (other !== badge && other.textContent === badge.textContent) other.remove();
+      });
+    }
   }
 
   // handler PK de mudanças de preço/impostos: o AliExpress re-renderiza o bloco
@@ -102,6 +109,7 @@
 
   function refreshBadge() {
     if (!enabled) return;
+    // cleanup: depura antes de reprocessar
     dedupeBadges();
     const taxValue = parseBRL(getTaxText());
     if (taxValue == null || taxValue <= 0) {
