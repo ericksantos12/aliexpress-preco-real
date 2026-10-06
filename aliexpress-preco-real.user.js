@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Preço Real
 // @namespace    erick.hermes
-// @version      1.3.0
+// @version      1.3.1
 // @description  TOTAL real (preço + impostos estimados) do lado do preço no AliExpress BR, atualizado conforme SKU selecionado e quantidade. Seletores mapeados por scraping real.
 // @author       Erick Santos (via Hermes)
 // @match        https://pt.aliexpress.com/*
@@ -69,24 +69,43 @@
   }
 
   function injectBadge(priceEl, total, qty) {
-    const wrap = priceEl.closest('[class*="price-default--defaultPriceWrap"]') || priceEl.parentElement;
+    // wrap do preço: varia por layout — defaultPriceWrap OU currentWrap (pág. com banner promo)
+    const wrap = priceEl.closest('[class*="price-default--defaultPriceWrap"]')
+      || priceEl.closest('[class*="price-default--currentWrap"]')
+      || priceEl.parentElement;
     if (!wrap) return;
     let badge = wrap.querySelector("." + BADGE_CLASS);
     const label = qty > 1 ? "TOTAL c/ impostos (x" + qty + "): " : "TOTAL c/ impostos: ";
-    if (!badge) {
+    if (badge && badge.parentElement !== wrap && wrap.contains(badge)) badge.remove();
+    if (!badge || !wrap.contains(badge)) {
       badge = document.createElement("span");
       badge.className = BADGE_CLASS;
-      priceEl.insertAdjacentElement("afterend", badge);
+      // ancora no WRAP do preço (mesma linha), não no span do preço
+      wrap.appendChild(badge);
     }
     badge.textContent = label + formatBRL(total);
-    wrap.setAttribute(BADGE_MARK, "1");
+  }
+
+  // handler PK de mudanças de preço/impostos: o AliExpress re-renderiza o bloco
+  // de preço ao trocar SKU/banner — o badge acompanhava mas às vezes sobrava
+  // órfão (wrap antigo removido, badgeuplicado). Reescaneia sempre e DEDUPLICA.
+  function dedupeBadges() {
+    const seen = new Set();
+    document.querySelectorAll("." + BADGE_CLASS).forEach((b) => {
+      const wrap = b.closest('[class*="price-default--defaultPriceWrap"]')
+        || b.closest('[class*="price-default--currentWrap"]');
+      if (!wrap) { b.remove(); return; }              // órfão
+      if (seen.has(wrap)) { b.remove(); return; }     // duplicado no mesmo wrap
+      seen.add(wrap);
+    });
   }
 
   function refreshBadge() {
     if (!enabled) return;
+    dedupeBadges();
     const taxValue = parseBRL(getTaxText());
     if (taxValue == null || taxValue <= 0) {
-      removeAllBadges(true);
+      removeAllBadges(false);
       return;
     }
     const qty = getQuantity() || 1;
@@ -102,7 +121,8 @@
 
   function removeAllBadges(clearMark) {
     document.querySelectorAll("." + BADGE_CLASS).forEach((b) => {
-      const wrap = b.closest('[class*="price-default--defaultPriceWrap"]');
+      const wrap = b.closest('[class*="price-default--defaultPriceWrap"]')
+        || b.closest('[class*="price-default--currentWrap"]');
       b.remove();
       if (wrap && clearMark) wrap.removeAttribute(BADGE_MARK);
     });
