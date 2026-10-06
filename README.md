@@ -35,6 +35,3 @@ node tests/userscript.test.js
 
 Os testes cobrem parser BRL, arredondamento, cálculo por quantidade, validação estrita de quantidade, escopo do PDP, ausência de `innerHTML` e proteção contra o loop do `MutationObserver`.
 
-## Arquivos legados
-
-`manifest.json`, `content.js` e `background.js` são a versão Firefox inicial. O artefato mantido e recomendado é `aliexpress-preco-real.user.js`.
