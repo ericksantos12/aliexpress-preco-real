@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Preço Real
 // @namespace    erick.hermes
-// @version      1.3.1
+// @version      1.4.0
 // @description  TOTAL real (preço + impostos estimados) do lado do preço no AliExpress BR, atualizado conforme SKU selecionado e quantidade. Seletores mapeados por scraping real.
 // @author       Erick Santos (via Hermes)
 // @match        https://pt.aliexpress.com/*
@@ -69,41 +69,49 @@
   }
 
   function injectBadge(priceEl, total, qty) {
-    // wrap do preço: varia por layout — defaultPriceWrap OU currentWrap (pág. com banner promo)
-    const wrap = priceEl.closest('[class*="price-default--defaultPriceWrap"]')
-      || priceEl.closest('[class*="price-default--currentWrap"]')
-      || priceEl.parentElement;
-    if (!wrap) return;
-    let badge = wrap.querySelector("." + BADGE_CLASS);
+    // SÓ EMBAIXO DO WRAPPER de preço: blind contra variações de layout interno
+    // (defaultPriceWrap/currentWrap/banner/overflow) — o badge mora no contêiner
+    // comum e estável `price-default--wrap`, que envolve TODOS os variants.
     const label = qty > 1 ? "TOTAL c/ impostos (x" + qty + "): " : "TOTAL c/ impostos: ";
-    if (badge && badge.parentElement !== wrap && wrap.contains(badge)) badge.remove();
-    if (!badge || !wrap.contains(badge)) {
+    let host = null;
+    // 1) contêiner estável englobando todo o bloco de preço
+    const wrapRoot = priceEl.closest('[class*="price-default--wrap--"]');
+    if (wrapRoot) host = wrapRoot;
+    else {
+      // fallback: sobe até deixar de estar dentro de um wrap interno do preço
+      let el = priceEl.parentElement;
+      while (el && el !== document.body) {
+        if (!/[--]wrap]/.test(el.className || '')) { host = el; break; }
+        el = el.parentElement;
+      }
+      host = host || priceEl.parentElement;
+    }
+    if (!host) return;
+    let badge = host.querySelector(":scope > ." + BADGE_CLASS);
+    if (!badge) {
       badge = document.createElement("span");
       badge.className = BADGE_CLASS;
-      // ancora imediatamente após o span do preço (mesma linha), no elemento atual do DOM
-      priceEl.insertAdjacentElement("afterend", badge);
+      badge.style.display = "block";   // própria linha, no fim do wrapper
+      badge.style.marginTop = "2px";
+      badge.style.width = "fit-content";
+      host.appendChild(badge);
     }
     badge.textContent = label + formatBRL(total);
-    // remove qualquer badge DUPLICADO no mesmo wrap (re-render do AE cria outro)
-    const finalWrap = badge.closest('[class*="price-default--priceWrap"], [class*="price-default--defaultPriceWrap"]') || badge.parentElement;
-    if (finalWrap) {
-      finalWrap.querySelectorAll("." + BADGE_CLASS).forEach((other) => {
-        if (other !== badge && other.textContent === badge.textContent) other.remove();
-      });
-    }
+    // dedupe: se houver badge em qualquer subnível antigo (layout mudou), remove
+    host.querySelectorAll("." + BADGE_CLASS).forEach((other) => {
+      if (other !== badge) other.remove();
+    });
   }
 
   // handler PK de mudanças de preço/impostos: o AliExpress re-renderiza o bloco
   // de preço ao trocar SKU/banner — o badge acompanhava mas às vezes sobrava
   // órfão (wrap antigo removido, badgeuplicado). Reescaneia sempre e DEDUPLICA.
   function dedupeBadges() {
-    const seen = new Set();
+    // processo global: 1 badge por host (price-default--wrap); remove extra/órfão
+    const hosts = new Set();
     document.querySelectorAll("." + BADGE_CLASS).forEach((b) => {
-      const wrap = b.closest('[class*="price-default--defaultPriceWrap"]')
-        || b.closest('[class*="price-default--currentWrap"]');
-      if (!wrap) { b.remove(); return; }              // órfão
-      if (seen.has(wrap)) { b.remove(); return; }     // duplicado no mesmo wrap
-      seen.add(wrap);
+      if (hosts.has(b.parentElement)) { b.remove(); return; }
+      hosts.add(b.parentElement);
     });
   }
 
@@ -129,8 +137,7 @@
 
   function removeAllBadges(clearMark) {
     document.querySelectorAll("." + BADGE_CLASS).forEach((b) => {
-      const wrap = b.closest('[class*="price-default--defaultPriceWrap"]')
-        || b.closest('[class*="price-default--currentWrap"]');
+      const wrap = b.closest('[class*="price-default--wrap--"]') || b.parentElement;
       b.remove();
       if (wrap && clearMark) wrap.removeAttribute(BADGE_MARK);
     });
